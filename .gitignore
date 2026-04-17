@@ -1,0 +1,25 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+.vs/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# Secrets – copy the *.example.* counterpart, rename it (remove ".example"), and fill in real values
+backend/USAePayPortal/appsettings.json
+docker.settings.env
+
+# Claude Code
+.claude/
+
+# VS Code workspace (machine-specific)
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
