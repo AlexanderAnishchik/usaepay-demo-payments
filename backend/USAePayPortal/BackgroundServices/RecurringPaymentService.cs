@@ -65,27 +65,14 @@ internal class RecurringPaymentService(
                     customer.CustomerKey, customer.PaymentMethodKey, ChargeAmount);
 
                 store.RecordPayment(customer.CustomerKey, record);
-
-                if (record.Success)
+                if (!record.Success)
                 {
-                    if (_logger.IsEnabled(LogLevel.Information))
-                    {
-                        _logger.LogInformation(
-                            "Recurring charge OK – customer {Key} txn {Txn}",
-                            customer.CustomerKey, record.TransactionKey);
-                    }
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "Recurring charge FAILED – customer {Key}: {Error}",
-                        customer.CustomerKey, record.Error);
+                    _logger.LogWarning("Scheduled recurring charge was not approved.");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
-                    "Unexpected error charging customer {Key}", customer.CustomerKey);
+                _logger.LogError("Recurring charge could not be confirmed ({ErrorType})", ex.GetType().Name);
             }
         }
     }

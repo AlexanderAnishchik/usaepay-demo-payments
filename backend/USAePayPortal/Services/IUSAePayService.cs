@@ -16,16 +16,16 @@ public interface IUSAePayService
     /// <summary>
     /// Creates a customer in the USAePay vault, runs an initial cc:sale with
     /// <paramref name="chargeAmount"/> using the single-use <paramref name="paymentKey"/>,
-    /// converts the resulting transaction into a reusable vault token, then attaches
-    /// that token as a payment method for future recurring billing.
+    /// and uses the approved transaction reference to attach a reusable payment method.
+    /// If vaulting fails after approval, the result includes the initial charge receipt.
     /// </summary>
     Task<SaveCustomerResponse> SaveCustomerAsync(
         string paymentKey, string firstName, string lastName, string email,
         decimal chargeAmount, string? phone = null);
 
     /// <summary>
-    /// Runs a cc:sale against the customer's stored payment method via
-    /// <c>POST /customers/{custkey}/transactions</c> (USAePay Customer Transaction).
+    /// Runs a <c>customer:sale</c> via <c>POST /transactions</c> with the
+    /// customer's key and stored payment method key.
     /// </summary>
     Task<RecurringPaymentRecord> ChargeCustomerAsync(string customerKey, string paymentMethodKey, decimal amount);
 }

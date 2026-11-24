@@ -15,7 +15,11 @@ async function request(path, options = {}) {
       data?.error ||
       data?.title ||
       `HTTP ${res.status}: ${res.statusText}`;
-    throw new Error(message);
+    const error = new Error(message);
+    if (res.status === 422 && data?.initialCharge?.success === true) {
+      error.initialCharge = data.initialCharge;
+    }
+    throw error;
   }
 
   return data;

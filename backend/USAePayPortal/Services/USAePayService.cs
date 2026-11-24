@@ -80,6 +80,8 @@ internal class USAePayService(
         decimal chargeAmount, string? phone = null)
     {
         string fullName = $"{firstName} {lastName}";
+        ChargeResponse? initialCharge = null;
+        string? customerKey = null;
 
         try
         {
@@ -92,36 +94,20 @@ internal class USAePayService(
                 phone = phone ?? string.Empty
             };
 
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation("POST customers request: {Body}", JsonSerializer.Serialize(custBody));
-            }
-
             using HttpResponseMessage custResp = await SendJsonAsync(HttpMethod.Post, "customers", custBody);
+            _logger.LogInformation("USAePay customer creation returned HTTP {StatusCode}", (int)custResp.StatusCode);
             string custJson = await custResp.Content.ReadAsStringAsync();
+            USAePayCustomerResponse? cust = JsonSerializer.Deserialize<USAePayCustomerResponse>(custJson);
 
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation("POST customers [{Status}]: {Json}", (int)custResp.StatusCode, custJson);
-            }
-
-            USAePayCustomerResponse cust = JsonSerializer.Deserialize<USAePayCustomerResponse>(custJson)!;
-
-            if (!string.IsNullOrEmpty(cust.Error))
+            if (!string.IsNullOrEmpty(cust?.Error))
             {
                 return new SaveCustomerResponse(false, null, null, null, $"[step:customers][{cust.ErrorCode}] {cust.Error}");
             }
 
-            string? customerKey = cust.CustomerKey;
-
-            if (_logger.IsEnabled(LogLevel.Information))
+            customerKey = cust?.CustomerKey;
+            if (!custResp.IsSuccessStatusCode || string.IsNullOrWhiteSpace(customerKey))
             {
-                _logger.LogInformation("Extracted customerKey: {Key}", customerKey);
-            }
-
-            if (string.IsNullOrEmpty(customerKey))
-            {
-                return new SaveCustomerResponse(false, null, null, null, $"[step:customers] No customer key in response: {custJson}");
+                return new SaveCustomerResponse(false, null, null, null, "[step:customers] Customer creation was not confirmed.");
             }
 
             // 2. Run cc:sale with the single-use payment_key, linked to the new customer.
@@ -134,60 +120,64 @@ internal class USAePayService(
                 custkey = customerKey
             };
 
-            ChargeResponse chargeResult = await PostTransactionAsync(txBody);
+            initialCharge = await PostTransactionAsync(txBody);
 
-            if (!chargeResult.Success)
+            if (!initialCharge.Success)
             {
                 return new SaveCustomerResponse(false, customerKey, null, fullName,
-                    $"[step:transaction] {chargeResult.Error}", chargeResult);
+                    $"[step:transaction] {initialCharge.Error}", initialCharge);
             }
 
             // 3. Attach the transaction as a stored payment method on the customer.
+            if (string.IsNullOrWhiteSpace(initialCharge.TransactionKey))
+            {
+                return new SaveCustomerResponse(false, customerKey, null, fullName,
+                    "[step:payment_methods] No transaction reference for the approved charge.", initialCharge);
+            }
+
             object pmBody = new[]
             {
                 new
                 {
                     method_name = DealerPortalPaymentMethodName,
                     pay_type = "transaction",
-                    transaction_key = chargeResult.TransactionKey
+                    transaction_key = initialCharge.TransactionKey
                 }
             };
 
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation("POST payment_methods request: {Body}", JsonSerializer.Serialize(pmBody));
-            }
-
             using HttpResponseMessage pmResp = await SendJsonAsync(HttpMethod.Post, $"customers/{customerKey}/payment_methods", pmBody);
+            _logger.LogInformation("USAePay payment method creation returned HTTP {StatusCode}", (int)pmResp.StatusCode);
+
+            if (!pmResp.IsSuccessStatusCode)
+            {
+                return new SaveCustomerResponse(false, customerKey, null, fullName,
+                    $"[step:payment_methods] Gateway returned HTTP {(int)pmResp.StatusCode}.", initialCharge);
+            }
+
             string pmJson = await pmResp.Content.ReadAsStringAsync();
-
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation("POST payment_methods [{Status}]: {Json}", (int)pmResp.StatusCode, pmJson);
-            }
-
-            List<USAePayPaymentMethodResponse>? pm = JsonSerializer.Deserialize<List<USAePayPaymentMethodResponse>>(pmJson);
-
-            if (pm == null || pm.Count == 0)
+            USAePayPaymentMethodResponse? method = JsonSerializer
+                .Deserialize<List<USAePayPaymentMethodResponse>>(pmJson)?.FirstOrDefault();
+            if (!string.IsNullOrEmpty(method?.Error))
             {
                 return new SaveCustomerResponse(false, customerKey, null, fullName,
-                    "[step:payment_methods] Empty response", chargeResult);
+                    $"[step:payment_methods][{method.ErrorCode}] {method.Error}", initialCharge);
             }
 
-            USAePayPaymentMethodResponse method = pm[0];
-
-            if (!string.IsNullOrEmpty(method.Error))
+            if (string.IsNullOrWhiteSpace(method?.Key))
             {
                 return new SaveCustomerResponse(false, customerKey, null, fullName,
-                    $"[step:payment_methods][{method.ErrorCode}] {method.Error}", chargeResult);
+                    "[step:payment_methods] No payment method key in the response.", initialCharge);
             }
 
-            return new SaveCustomerResponse(true, customerKey, method.Key, fullName, null, chargeResult);
+            return new SaveCustomerResponse(true, customerKey, method.Key, fullName, null, initialCharge);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error saving customer");
-            return new SaveCustomerResponse(false, null, null, null, ex.Message);
+            // The vault request can time out after the sale has already been approved.
+            string step = initialCharge?.Success == true ? "payment_methods" : "customers";
+            _logger.LogError("USAePay {Step} failed with {ErrorType}", step, ex.GetType().Name);
+            return new SaveCustomerResponse(false, customerKey, null, fullName,
+                $"[step:{step}] The gateway operation could not be confirmed.", initialCharge);
         }
     }
 
@@ -209,13 +199,10 @@ internal class USAePayService(
         using HttpResponseMessage resp = await SendJsonAsync(HttpMethod.Post, "transactions", body);
         string json = await resp.Content.ReadAsStringAsync();
 
-        if (_logger.IsEnabled(LogLevel.Debug))
-        {
-            _logger.LogDebug("Customer transaction [{Status}]: {Json}", (int)resp.StatusCode, json);
-        }
-
         USAePayTransactionResponse tx = JsonSerializer.Deserialize<USAePayTransactionResponse>(json)!;
         bool approved = (tx.ResultCode == "A") || (tx.Result == "Approved");
+        _logger.LogInformation("USAePay recurring sale returned HTTP {StatusCode} (approved: {Approved})",
+            (int)resp.StatusCode, approved);
 
         return new RecurringPaymentRecord(
             Timestamp: DateTime.UtcNow,
@@ -238,21 +225,18 @@ internal class USAePayService(
             using HttpResponseMessage resp = await SendJsonAsync(HttpMethod.Post, "transactions", body);
             string json = await resp.Content.ReadAsStringAsync();
 
-            if (_logger.IsEnabled(LogLevel.Debug))
-            {
-                _logger.LogDebug("Transaction response [{Status}]: {Json}", (int)resp.StatusCode, json);
-            }
-
             USAePayTransactionResponse tx = JsonSerializer.Deserialize<USAePayTransactionResponse>(json)!;
 
             // USAePay returns result_code "A" for Approved.
             bool approved = (tx.ResultCode == "A") || (tx.Result == "Approved");
+            _logger.LogInformation("USAePay sale returned HTTP {StatusCode} (approved: {Approved})",
+                (int)resp.StatusCode, approved);
 
             if (!approved)
             {
                 string errMsg = !string.IsNullOrEmpty(tx.Error)
                     ? $"[{tx.ErrorCode}] {tx.Error}"
-                    : $"Transaction declined: {tx.Result}";
+                    : tx.Result ?? "Payment outcome unknown. Check the gateway before submitting another payment.";
 
                 return new ChargeResponse(false, tx.Key, null, tx.Result, errMsg);
             }
@@ -261,8 +245,9 @@ internal class USAePayService(
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error posting transaction");
-            return new ChargeResponse(false, null, null, null, ex.Message);
+            _logger.LogError("USAePay sale could not be confirmed ({ErrorType})", ex.GetType().Name);
+            return new ChargeResponse(false, null, null, null,
+                "Payment outcome unknown. Check the gateway before submitting another payment.");
         }
     }
 
