@@ -137,7 +137,13 @@ export default function PaymentForm({ publicApiKey }) {
         setSuccess(data);
       }
     } catch (err) {
-      setSubmitError(err.message);
+      if (err.initialCharge) {
+        const warning = 'Initial payment approved. Recurring billing was not set up. Do not submit this payment again.';
+        const reference = err.initialCharge.transactionKey;
+        setSubmitError(reference ? `${warning} Transaction reference: ${reference}` : warning);
+      } else {
+        setSubmitError(err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -270,17 +276,20 @@ export default function PaymentForm({ publicApiKey }) {
       )}
 
       <p style={styles.testCardsHint}>
-        Use{' '}
         <a
-          href="https://help.usaepay.info/developer/reference/testcards/"
+          href="https://help.usaepay.com/developer/reference/testcards/"
           target="_blank"
           rel="noopener noreferrer"
           style={styles.testCardsLink}
         >
           USAePay test cards
         </a>
-        {' '}(e.g. <code style={styles.cardCode}>4111111111111111</code> exp{' '}
-        <code style={styles.cardCode}>0924</code> CVV <code style={styles.cardCode}>123</code>)
+        <br />
+        Approval: <code style={styles.cardCode}>4000 1000 1111 2224</code> · CVV 123
+        <br />
+        Decline: <code style={styles.cardCode}>4000 3000 1111 2220</code> · CVV 999
+        <br />
+        Expiry for both: <code style={styles.cardCode}>12/30</code>
       </p>
     </form>
   );

@@ -1,186 +1,126 @@
-# USAePay Payment Portal
+# USAePay payments with ASP.NET Core and React
 
-A proof-of-concept payment portal built on the [USAePay](https://usaepay.com) gateway.  
-Card data is tokenised client-side via **pay.js** — raw card numbers never touch the server.
+Charge a card once, save its payment method, then bill the same customer again in the USAePay sandbox. React uses the hosted Pay.js v1 card field. The ASP.NET Core 10 API receives a single-use token and calls the USAePay REST API v2.
 
-```
-backend/    .NET 10 Web API   – USAePay REST integration, recurring billing
-frontend/   React 18 + Vite   – pay.js iframe, payment form, billing dashboard
-```
+**[Watch the 60-second walkthrough](#walkthrough) · [Run the sandbox with Docker](#run-the-sandbox-with-docker)**
 
-<img width="1713" height="1247" alt="image" src="https://github.com/user-attachments/assets/335d768d-7c2f-4208-94c9-479c38fd8c60" />
- &nbsp;
- &nbsp;
- <img width="1717" height="1252" alt="image" src="https://github.com/user-attachments/assets/76d4f43c-873e-4a50-af66-06205b79a824" />
+## Walkthrough
 
+![Checkout walkthrough showing a sandbox sale, a saved customer, and a subsequent one-dollar charge](docs/media/walkthrough.gif)
 
+Select **Save card for recurring billing**, enter a fictitious customer, and submit the initial payment. Open **Recurring**, select **Force Billing**, and expand the customer to see the separate $1 charge.
 
----
-
-## Prerequisites
-
-| Tool | Version |
-|------|---------|
-| .NET SDK | 10.0+ |
-| Node.js | 18+ |
-| Docker + Compose | any recent |
-| USAePay sandbox account | [sandbox.usaepay.com](https://sandbox.usaepay.com) |
-
----
-
-## Getting API Keys
-
-1. Register dev account  at [developer.usaepay.com](https://developer.usaepay.com/).
-2. Request test Sandox Merchant account. [help.usaepay.info](https://help.usaepay.info/developer/reference/sandbox/).
-3. Receive source key by email.
-3. Now you can sign up at [sandbox.usaepay.com](https://sandbox.usaepay.com).
-
----
-
-## Setup
-
-### Local dev
-
-1. Copy the settings template and fill in your keys:
-
-```bash
-cp backend/USAePayPortal/appsettings.example.json backend/USAePayPortal/appsettings.json
-# Edit appsettings.json — set ApiKey, Pin, PublicApiKey
+```mermaid
+sequenceDiagram
+    actor Customer
+    participant UI as React
+    participant API as ASP.NET Core
+    participant GW as USAePay sandbox
+    Customer->>GW: Enter test card in the hosted Pay.js field
+    GW-->>UI: Single-use payment_key
+    UI->>API: Save customer with paymentKey and chargeAmount
+    API->>GW: Create customer
+    API->>GW: Initial sale with payment_key and customer key
+    GW-->>API: Approved sale and transaction key
+    API->>GW: Save payment method using transaction_key
+    GW-->>API: Reusable payment method key
+    API->>GW: Later customer sale with customer and payment method keys
 ```
 
-2. Run backend and frontend in separate terminals:
+Follow the implementation through the [React payment form](frontend/src/components/PaymentForm.jsx), [C# gateway calls](backend/USAePayPortal/Services/USAePayService.cs), and [recurring worker](backend/USAePayPortal/BackgroundServices/RecurringPaymentService.cs). USAePay hosts card entry and tokenizes the card. [Pay.js v1 reference](https://help.usaepay.com/developer/payjs-v1/)
 
-```bash
-# Terminal 1 — backend  (http://localhost:5000)
-cd backend/USAePayPortal && dotnet run
+## Run the sandbox with Docker
 
-# Terminal 2 — frontend  (http://localhost:5173)
-cd frontend && npm install && npm run dev
+You need Docker with Compose and a USAePay sandbox merchant account. In the sandbox merchant console, open **Settings → API Keys**, create a server API key with a PIN, then select **Add Public API Key** for the browser. [Request a sandbox account](https://help.usaepay.info/developer/reference/sandbox/) · [Merchant console key setup](https://help.usaepay.com/merchant/guide/settings/api-keys/)
+
+1. Clone this repository and open its directory.
+
+   ```sh
+   git clone https://github.com/AlexanderAnishchik/usaepay-demo-payments.git
+   cd usaepay-demo-payments
+   ```
+
+2. Copy `docker.settings.example.env` to `docker.settings.env`. Set `USAePay__ApiKey`, `USAePay__Pin`, and `USAePay__PublicApiKey` in your copy. The template already selects the sandbox API and the local frontend URL.
+
+   ```sh
+   cp docker.settings.example.env docker.settings.env
+   ```
+
+3. Start the app.
+
+   ```sh
+   docker compose up --build -d
+   ```
+
+4. Open [the checkout](http://localhost:3000) and try a test card below. The [interactive API reference](http://localhost:5000/scalar/v1) and [OpenAPI document](http://localhost:5000/openapi/v1.json) are also available with the template's Development environment.
+5. Stop the demo with `docker compose down`. The worker bills enrolled customers $1 every ten minutes while the backend is running. **Force Billing** immediately bills every locally enrolled customer. Restarting the backend clears local enrollment and history. Removing a customer in the dashboard leaves the sandbox vault record in place.
+
+### Sandbox test cards
+
+| Scenario | Card number | Expiration | CVV |
+| --- | --- | --- | --- |
+| Approval | `4000 1000 1111 2224` | `12/30` | `123` |
+| Decline | `4000 3000 1111 2220` | `12/30` | `999` |
+
+These two cases were exercised through the hosted Pay.js field. The first produced an approved sale and a reusable payment method. The second returned a decline for a one-off payment. To reproduce the decline, leave **Save card for recurring billing** unchecked and click **Pay**. [USAePay sandbox test cards](https://help.usaepay.com/developer/reference/testcards/)
+
+## Run the app natively
+
+Use the .NET 10 SDK, Node.js 22, and the same sandbox credentials. Copy `backend/USAePayPortal/appsettings.example.json` to `backend/USAePayPortal/appsettings.json`. Set `ApiKey`, `Pin`, and `PublicApiKey` under `USAePay`.
+
+In one terminal at the repository root:
+
+```sh
+dotnet run --project backend/USAePayPortal
 ```
 
-The Vite dev server proxies `/api/*` to `:5000`, so no extra CORS setup is needed.
+In a second terminal:
 
-### Docker
-
-1. Copy the Docker settings template and fill in your keys:
-
-```bash
-cp docker.settings.example.env docker.settings.env
-# Edit docker.settings.env — set USAePay__ApiKey, USAePay__Pin, USAePay__PublicApiKey
+```sh
+cd frontend
+npm ci
+npm run dev
 ```
 
-2. Build and start:
+Open [the Vite checkout](http://localhost:5173). Vite forwards `/api` requests to port 5000.
 
-```bash
-docker-compose up --build
+## API examples
+
+For a one-off charge, React sends the token to `POST /api/payment/charge` using the app's camel-case field:
+
+```json
+{ "paymentKey": "<fresh Pay.js token>", "amount": 10.00 }
 ```
 
-| URL | |
-|-----|-|
-| `http://localhost:3000` | Frontend |
-| `http://localhost:5000` | Backend API |
-| `http://localhost:5000/scalar/v1` | Interactive API docs (Scalar UI) |
-| `http://localhost:5000/openapi/v1.json` | OpenAPI spec |
+The backend sends the token to the gateway's `POST /api/v2/transactions` using USAePay's field name:
 
----
-
-## Configuration reference
-
-### `appsettings.json` (local dev)
-
-| Key | Description |
-|-----|-------------|
-| `USAePay:ApiKey` | Server-side API key — used for HMAC-signed backend calls |
-| `USAePay:Pin` | PIN for `s2/{seed}/{sha256(apiKey+seed+pin)}` auth header |
-| `USAePay:PublicApiKey` | Client-side public key passed to pay.js in the browser |
-| `USAePay:BaseUrl` | USAePay v2 API base URL (sandbox or production) |
-| `USAePay:FrontendUrl` | Frontend origin for CORS (default `http://localhost:5173`) |
-
-### `docker.settings.env` (Docker)
-
-Same keys in `UPPER__CASE` format (`USAePay__ApiKey`, `USAePay__Pin`, …).  
-`FrontendUrl` defaults to `http://localhost:3000` in Docker mode.
-
----
-
-## Features
-
-### One-off payment
-
-1. Enter card details in the pay.js hosted iframe.
-2. Set an amount and click **Pay**.
-3. `client.getPaymentKey()` tokenises the card directly with USAePay and returns a single-use `payment_key` — **raw card data never reaches the backend**.
-4. The `payment_key` is posted to `POST /api/payment/charge`.
-
-### Save card + recurring billing
-
-1. Toggle **Save card for recurring billing**, fill in customer details, click **Save Card & Pay**.
-2. The backend runs three sequential USAePay calls:
-   - `POST /customers` — create a customer record
-   - `POST /transactions` — `cc:sale` with the single-use `payment_key` (initial charge)
-   - `POST /customers/{custkey}/payment_methods` — attach the card via the transaction reference
-3. `RecurringPaymentService` charges every saved customer **$1.00 every 10 minutes** using the Customer Transaction API.
-
-### Recurring status dashboard
-
-- Lists all saved customers with their Customer Key and Payment Method Key.
-- **Force Billing** — trigger an immediate charge cycle for all customers.
-- **Delete** — remove a customer from local billing (a confirmation note warns the USAePay vault record is unaffected).
-- Auto-refreshes every 30 seconds.
-
----
-
-## API Reference
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/payment/config` | Public API key for pay.js initialisation |
-| `POST` | `/api/payment/charge` | One-off charge via `payment_key` |
-| `POST` | `/api/payment/customers` | Save customer + card, run initial charge |
-| `GET` | `/api/payment/recurring` | List customers and charge history |
-| `POST` | `/api/payment/recurring/run` | Force an immediate billing cycle |
-| `DELETE` | `/api/payment/customers/{key}` | Remove customer from local store only |
-
-Full interactive docs are available at `/scalar/v1` when the server is running.
-
----
-
-## Architecture
-
-### PCI tokenisation boundary
-
-```
-Browser                          USAePay
-  │                                 │
-  │── pay.js iframe (card entry) ──▶│
-  │◀─────────── payment_key ────────│  (single-use token)
-  │
-  │── POST /api/payment/charge ──▶ Backend
-        { payment_key, amount }       │
-                                      │── POST /transactions ──▶ USAePay
+```json
+{ "command": "cc:sale", "payment_key": "<same token>", "amount": "10.00", "description": "Portal charge" }
 ```
 
-The backend only ever sees the opaque `payment_key` — not card numbers, CVVs, or expiry dates.
+| App route | Purpose |
+| --- | --- |
+| `GET /api/payment/config` | Read the public Pay.js configuration |
+| `POST /api/payment/charge` | Make a one-off charge |
+| `POST /api/payment/customers` | Create a customer, take the initial payment, and save the payment method |
+| `GET /api/payment/recurring` | Read enrolled customers and their recurring charge history |
+| `POST /api/payment/recurring/run` | Run a $1 billing cycle for all enrolled customers |
+| `DELETE /api/payment/customers/{customerKey}` | Remove a customer from local billing |
 
-### Save-card flow
+If the initial payment succeeds and saving the card then fails, `POST /api/payment/customers` returns HTTP `422` with `initialCharge.success` set to `true` and the transaction reference when available. **The initial payment went through.** Use its reference to reconcile the sale. Submitting the checkout again would initiate another payment.
 
+## Run the tests without gateway credentials
+
+From the repository root:
+
+```sh
+dotnet test USAePayPortal.sln
+cd frontend
+npm ci
+npm test
+npm run build
 ```
-POST /api/payment/customers
-  1. POST /customers              → custkey
-  2. POST /transactions (cc:sale) → transkey  (token consumed, card charged)
-  3. POST /customers/{custkey}/payment_methods ← transkey → methodkey
-```
 
-Both `custkey` and `methodkey` are kept in an in-memory `ConcurrentDictionary` for recurring use.  
-**Replace with a persistent store before production use.**
+The API tests exercise the payment routes against a simulated gateway. The React tests submit the form and verify that dismissing a partial-payment warning sends no additional request.
 
----
-
-## Test Cards (USAePay Sandbox)
-
-| Card Number | Result |
-|-------------|--------|
-| `4111 1111 1111 1111` | Approved |
-| `4111 1111 1111 1129` | Declined |
-
-Use any future expiry and any 3-digit CVV. Full list at [USAePay test cards](https://help.usaepay.info/developer/test-cards/).
+[MIT license](LICENSE)

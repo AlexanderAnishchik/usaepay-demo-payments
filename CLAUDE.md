@@ -23,7 +23,7 @@ A PoC payment portal integrating the USAePay payment gateway:
 cd backend/USAePayPortal && dotnet run
 
 # Frontend (http://localhost:5173, proxies /api/* to :5000)
-cd frontend && npm install && npm run dev
+cd frontend && npm ci && npm run dev
 ```
 
 Scalar UI: `http://localhost:5000/scalar/v1` | OpenAPI: `http://localhost:5000/openapi/v1.json`
@@ -31,7 +31,7 @@ Scalar UI: `http://localhost:5000/scalar/v1` | OpenAPI: `http://localhost:5000/o
 ### Docker
 
 ```bash
-docker-compose up --build
+docker compose up --build
 # frontend → http://localhost:3000
 # backend  → http://localhost:5000
 ```
@@ -64,10 +64,10 @@ In Docker, env vars use `__` separator: `USAePay__ApiKey`, etc. `FrontendUrl` is
 
 Card data never reaches the .NET backend:
 
-1. `index.html` loads `pay.js` as a `<script>` tag → exposes `window.usaepay` globally
+1. `App.jsx` loads the sandbox Pay.js v1 script from the backend configuration, exposing `window.usaepay` globally
 2. `PaymentForm.jsx` mounts a hosted card-entry iframe via `card.addHTML('payjs-card-container')`
 3. On submit, `client.getPaymentKey(card)` sends card data directly to USAePay → returns a **single-use `payment_key`**
-4. Frontend posts only the `payment_key` to the backend
+4. The frontend sends the token as `paymentKey` with the amount or customer details. The backend sends it to USAePay as `payment_key`.
 
 React Strict Mode guard: `if (payClientRef.current) return` in `PaymentForm` prevents double-mounting the iframe.
 
@@ -85,7 +85,7 @@ Both `custkey` and `methodkey` are stored in `CustomerStoreSingleton` for recurr
 
 `RecurringPaymentService` is an `IHostedService` that fires every 10 minutes. Per cycle it resolves a new DI scope (because `IUSAePayService` is scoped) and calls `ChargeCustomerAsync` for every entry in `CustomerStoreSingleton`.
 
-`ChargeCustomerAsync` uses `POST /customers/{custkey}/transactions` with `command: customer:sale`. No token fetch needed — USAePay uses the stored payment method automatically.
+`ChargeCustomerAsync` posts `command: customer:sale`, `custkey`, and `paymethod_key` to `/transactions`.
 
 `CustomerStoreSingleton` is a singleton `ConcurrentDictionary` (in-memory, not persisted).
 
@@ -102,7 +102,7 @@ Both `custkey` and `methodkey` are stored in `CustomerStoreSingleton` for recurr
 
 ### Backend service layer
 
-`USAePayService` is the sole integration point. Registered as scoped, injected via `AddHttpClient<USAePayService>()`.
+`IUSAePayService` resolves the typed HTTP client for the current scope. A confirmed initial sale followed by a vault failure returns HTTP 422 with the approved `initialCharge` receipt.
 
 Auth: each outgoing call builds a fresh `Authorization: Basic` header — `s2/{seed}/{sha256(apiKey+seed+pin)}` — set on each `HttpRequestMessage` individually to avoid non-thread-safe `DefaultRequestHeaders` mutation.
 

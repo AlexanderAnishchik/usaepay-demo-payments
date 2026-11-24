@@ -23,17 +23,19 @@ internal static class ServiceComponentsDI
         // Configuration
         services.Configure<USAePayOptions>(configuration.GetSection("USAePay"));
 
-        // HTTP client
-        services.AddHttpClient<USAePayService>();
+        // The vault URL contains the customer key. Log operation names and status in the service.
+        services.AddHttpClient<USAePayService>().RemoveAllLoggers();
 
         // Application services
         services.AddSingleton<CustomerStoreSingleton>();
-        services.AddScoped<IUSAePayService, USAePayService>();
+        services.AddScoped<IUSAePayService>(provider => provider.GetRequiredService<USAePayService>());
 
         // Background services
         services.AddHostedService<RecurringPaymentService>();
 
         // ASP.NET Core infrastructure
+        // The local DELETE route also carries a customer key in the request path.
+        services.AddLogging(logging => logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning));
         services.AddControllers();
         services.AddOpenApi();
 

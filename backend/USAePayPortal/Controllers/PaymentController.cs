@@ -72,8 +72,8 @@ public class PaymentController(
     /// <summary>
     /// Saves the card to the USAePay customer vault and registers the customer
     /// for recurring billing.
-    /// The flow: create customer → cc:sale with single-use payment_key →
-    /// create token from transkey → attach reusable token as payment method.
+    /// The approved sale's transaction reference is used to attach a reusable payment method.
+    /// If that step fails, the 422 response includes the approved initial charge.
     /// </summary>
     [HttpPost("customers")]
     public async Task<IActionResult> SaveCustomer([FromBody] SaveCustomerRequest req)
@@ -98,13 +98,16 @@ public class PaymentController(
             return BadRequest(new { error = "chargeAmount must be greater than zero" });
         }
 
-        // Save to vault: creates customer, runs initial cc:sale, converts transkey
-        // to a reusable vault token, then attaches it as a payment method.
         SaveCustomerResponse saveResult = await _usaePay.SaveCustomerAsync(
             req.PaymentKey, req.FirstName, req.LastName, req.Email, req.ChargeAmount, req.Phone);
 
         if (!saveResult.Success)
         {
+            if (saveResult.InitialCharge is { Success: true } initialCharge)
+            {
+                return UnprocessableEntity(new { error = saveResult.Error, initialCharge });
+            }
+
             return UnprocessableEntity(new { error = saveResult.Error });
         }
 

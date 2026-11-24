@@ -3,10 +3,10 @@ export default function ErrorBanner({ error, onDismiss }) {
 
   return (
     <div style={styles.banner} role="alert">
-      <span style={styles.icon}>⚠</span>
+      <span style={styles.icon} aria-hidden="true">⚠</span>
       <span style={styles.text}>{error}</span>
       {onDismiss && (
-        <button style={styles.close} onClick={onDismiss} aria-label="Dismiss error">
+        <button type="button" style={styles.close} onClick={onDismiss} aria-label="Dismiss error">
           ✕
         </button>
       )}
